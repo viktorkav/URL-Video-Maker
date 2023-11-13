@@ -6,9 +6,11 @@ from PIL import Image
 import os
 import subprocess
 import time
+import av
+import numpy as np
 
 # Configurações
-url = 'https://github.com/viktorkav'
+url = 'https://pyav.org/docs/stable/'
 output_folder = 'screenshots'
 output_image = 'fullpage_screenshot.png'
 output_video = 'output.mp4'
@@ -48,24 +50,50 @@ def capture_fullpage_screenshot(url, output_path):
     driver.save_screenshot(output_path)
     driver.quit()
 
-def create_pan_down_video(image_path, output_video, duration, fps):
-    # Carrega a imagem para obter suas dimensões
-    img_width, img_height = Image.open(image_path).size
+def create_pan_down_video_pyav(image_path, output_video, duration, fps):
+    # Carrega a imagem e obtém suas dimensões
+    img = Image.open(image_path)
+    img_width, img_height = img.size
 
     # Se a imagem capturada for menor que a altura do vídeo, não será possível fazer o scroll
     if img_height < 2160:
         raise ValueError("A altura da imagem capturada é menor que a altura necessária para o vídeo (2160 pixels).")
 
-    # Cálculo da taxa de rolagem baseada na altura da imagem e a duração do vídeo
-    scroll_rate = (img_height - 2160) / (8 * duration)
+    # Taxa de rolagem
+    scroll_rate = (img_height - 2160) / (duration * fps)
 
-    # Comando ffmpeg ajustado para o efeito de rolagem
-    ffmpeg_cmd = f"ffmpeg -loop 1 -i {image_path} -vf \"crop=3840:2160:0:y='min(t*{scroll_rate},in_h-2160)'\" -t {duration} -r {fps} -pix_fmt yuv420p {output_video}"
-    subprocess.call(ffmpeg_cmd, shell=True)
+    # Criação do contêiner de saída
+    output_container = av.open(output_video, mode='w')
+
+    # Criação do stream de vídeo
+    stream = output_container.add_stream('mpeg4', rate=fps)
+    stream.width = 3840
+    stream.height = 2160
+    stream.pix_fmt = 'yuv420p'
+
+    for frame_number in range(duration * fps):
+        img_frame = Image.new("RGB", (3840, 2160), (255, 255, 255))
+        scroll_pos = int(min(frame_number * scroll_rate, img_height - 2160))
+
+        img_frame.paste(img.crop((0, scroll_pos, 3840, scroll_pos + 2160)), (0, 0))
+
+        # Conversão da imagem PIL para frame de vídeo
+        frame = av.VideoFrame.from_image(img_frame)
+        
+        # Codificação do frame
+        for packet in stream.encode(frame):
+            output_container.mux(packet)
+
+    # Finalizando a codificação
+    for packet in stream.encode():
+        output_container.mux(packet)
+
+    # Fechando o contêiner
+    output_container.close()
 
 
 
 
 # Execução
 capture_fullpage_screenshot(url, output_image_path)
-create_pan_down_video(output_image_path, output_video_path, duration, fps)
+create_pan_down_video_pyav(output_image_path, output_video_path, duration, fps)
